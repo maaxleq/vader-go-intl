@@ -4,10 +4,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
+	"sync/atomic"
 
+	gt "github.com/bas24/googletranslatefree"
 	"github.com/grassmudhorses/vader-go/lexicon"
-	"github.com/mind1949/googletrans"
 )
 
 type langSlice []string
@@ -23,38 +25,53 @@ func (s *langSlice) Set(value string) error {
 
 const maxRequestsAtOnce = 10
 
+func makeTokenBucket(capacity int) chan struct{} {
+	tokenBucket := make(chan struct{}, capacity)
+	for i := 0; i < capacity; i++ {
+		tokenBucket <- struct{}{}
+	}
+
+	return tokenBucket
+}
+
 func main() {
 	var langs langSlice
 	flag.Var(&langs, "langs", "language codes of the languages to add a Vader lexicon for")
 
+	var verbose bool
+	flag.BoolVar(&verbose, "v", false, "whether to print progression")
+
 	flag.Parse()
 
-	tokenBucket := make(chan struct{}, maxRequestsAtOnce)
-	for i := 0; i < maxRequestsAtOnce; i++ {
-		tokenBucket <- struct{}{}
-	}
+	isWordRegex := regexp.MustCompile(`[0-9a-zA-Zà-üÀ-Ü\-\' ]+`)
+
+	tokenBucket := makeTokenBucket(maxRequestsAtOnce)
 
 	for _, lang := range langs {
+		var i uint32 = 0
 		for word := range lexicon.Sentiments {
-			<-tokenBucket
+			if !isWordRegex.MatchString(word) {
+				continue
+			}
+
+			<-tokenBucket // Wait for token
 
 			go func(word, lang string) {
-				params := googletrans.TranslateParams{
-					Src:  "en",
-					Dest: lang,
-					Text: word,
-				}
+				defer func() {
+					recover() // In case the Google Translate library panics, which happens sometimes
+				}()
 
-				fmt.Printf("will translate %s to %s\n", word, lang)
-
-				translated, errTranslate := googletrans.Translate(params)
+				translated, errTranslate := gt.Translate(word, "en", lang)
 				if errTranslate != nil {
 					log.Fatal(errTranslate)
 				}
 
-				fmt.Printf("%s to %s = %s\n", word, lang, translated.Text)
+				if verbose {
+					atomic.AddUint32(&i, 1)
+					fmt.Printf("[%s:%d] %s = %s\n", lang, i, word, translated)
+				}
 
-				tokenBucket <- struct{}{}
+				tokenBucket <- struct{}{} // Give back token
 			}(word, lang)
 		}
 	}
