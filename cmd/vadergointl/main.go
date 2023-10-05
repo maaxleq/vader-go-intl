@@ -15,6 +15,7 @@ import (
 	"github.com/grassmudhorses/vader-go/lexicon"
 )
 
+// langSlice defines a type that can be used with the flag package to parse a comma-separated list.
 type langSlice []string
 
 func (s *langSlice) String() string {
@@ -26,8 +27,10 @@ func (s *langSlice) Set(value string) error {
 	return nil
 }
 
+// Default number of concurrent requests for translations.
 const defaultConcurrentRequests = 10
 
+// makeTokenBucket creates and fills a channel with tokens for rate limiting.
 func makeTokenBucket(capacity int) chan struct{} {
 	tokenBucket := make(chan struct{}, capacity)
 	for i := 0; i < capacity; i++ {
@@ -37,6 +40,7 @@ func makeTokenBucket(capacity int) chan struct{} {
 	return tokenBucket
 }
 
+// writeInTranslationMap safely writes a word and its corresponding value into a map.
 func writeInTranslationMap[T any](mutex *sync.Mutex, dest map[string]T, word string, value T) {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -44,6 +48,7 @@ func writeInTranslationMap[T any](mutex *sync.Mutex, dest map[string]T, word str
 	dest[word] = value
 }
 
+// translateMap translates a map's keys from English to another language.
 func translateMap[T any](source map[string]T, lang string, tokenBucket chan struct{}) map[string]T {
 	translatedMap := make(map[string]T)
 	isWordRegex := regexp.MustCompile(`[0-9a-zA-Zà-üÀ-Ü\-\' ]+`)
@@ -61,13 +66,14 @@ func translateMap[T any](source map[string]T, lang string, tokenBucket chan stru
 		wg.Add(1)
 		go func(value T, word, lang string) {
 			defer func() {
-				// In case the Google Translate library panics, which cna happen sometimes
+				// Recover from potential panics in the Google Translate library.
 				if r := recover(); r != nil {
 					writeInTranslationMap[T](&mutex, translatedMap, word, value)
 				}
 				wg.Done()
 			}()
 
+			// Translate the word.
 			translatedWord, errTranslate := gt.Translate(word, "en", lang)
 			if errTranslate != nil {
 				writeInTranslationMap[T](&mutex, translatedMap, word, value)
@@ -79,15 +85,18 @@ func translateMap[T any](source map[string]T, lang string, tokenBucket chan stru
 		}(value, word, lang)
 	}
 
+	// Wait for all translation goroutines to finish
 	wg.Wait()
 
 	return translatedMap
 }
 
+// languageCodeToCamelCase converts a language code into a camel case format.
 func languageCodeToCamelCase(lang string) string {
 	return strings.ToUpper(string([]rune(lang)[:1])) + string([]rune(lang)[1:])
 }
 
+// writeTranslatedLexicon writes the translated lexicon into a Go source file.
 func writeTranslatedLexicon(outPath, lang string, lexicon lexicon.CustomLexicon) error {
 	finalDir := path.Join(outPath, "lexicons")
 	if _, errStat := os.Stat(finalDir); errStat != nil {
@@ -107,9 +116,11 @@ func writeTranslatedLexicon(outPath, lang string, lexicon lexicon.CustomLexicon)
 		return errFile
 	}
 
+	// Write the Go code to the file.
 	return writeCode(file, lang, lexiconPackageName, lexiconStructName, lexicon)
 }
 
+// writeCode writes the code for the lexicon struct into a Go source file.
 func writeCode(file *os.File, lang, lexiconPackageName, lexiconStructName string, lexicon lexicon.CustomLexicon) error {
 	defer file.Close()
 
@@ -161,6 +172,7 @@ func (s %s) BoostValue(text string) float64 {
 	return errWrite
 }
 
+// makeMapCode generates Go code for a given map.
 func makeMapCode[T any](varName string, source map[string]T) string {
 	code := fmt.Sprintf(
 		`var %s map[string]%T = map[string]%T{`, varName, *new(T), *new(T))
@@ -176,15 +188,13 @@ func makeMapCode[T any](varName string, source map[string]T) string {
 }
 
 func main() {
+	// Command-line flags initialization.
 	var langs langSlice
 	flag.Var(&langs, "langs", "language codes of the languages to add a Vader lexicon for (fr, es, nl, ...)")
-
 	var concurentRequests int
 	flag.IntVar(&concurentRequests, "reqs", defaultConcurrentRequests, "how many requests to run at once")
-
 	var outPath string
 	flag.StringVar(&outPath, "out", ".", "path where the translated lexicons folder will be created")
-
 	flag.Parse()
 
 	absOutPath, errOutPath := filepath.Abs(outPath)
@@ -194,6 +204,7 @@ func main() {
 
 	tokenBucket := makeTokenBucket(concurentRequests)
 
+	// For each specified language, translate the lexicons and write them to Go source files.
 	for _, lang := range langs {
 		sentiments := translateMap[float64](lexicon.Sentiments, lang, tokenBucket)
 		contrasts := translateMap[bool](lexicon.Contrasts, lang, tokenBucket)
