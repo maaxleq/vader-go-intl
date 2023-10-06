@@ -9,8 +9,16 @@
 
 ## Installation
 
+### Library
+
 ```bash
 go get github.com/maaxleq/vader-go-intl
+```
+
+### Command
+
+```bash
+go install github.com/maaxleq/vader-go-intl/cmd/vadergointl@latest
 ```
 
 ## Usage
